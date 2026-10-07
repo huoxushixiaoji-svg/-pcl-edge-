@@ -1,0 +1,32 @@
+# Local installation state and downloaded files
+/config.json
+/com.local.pcl_download_bridge.json
+/reservations/
+/PCL/
+/downloads/
+/logs/
+*.log
+*.zip
+*.exe
+*.dll
+*.pdb
+
+# Build and editor output
+/bin/
+/obj/
+/dist/
+/node_modules/
+/coverage/
+/.vs/
+/.vscode/
+__pycache__/
+.DS_Store
+Thumbs.db
+
+# Local secrets (manifest.json contains a public extension key)
+.env
+.env.*
+*.pem
+*.pfx
+*.p12
+*.key

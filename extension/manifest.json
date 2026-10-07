@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "PCL 百宝箱下载助手",
+  "version": "0.1.2",
+  "description": "将普通 HTTP/HTTPS 下载交给本机 PCL 百宝箱的多线程下载引擎。",
+  "minimum_chrome_version": "120",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsBE4ZbUny660pqmg8igdVWMiidd0jfbG433fbcoL/eEewwFrgu4/gXKePePN8vmiQE0qi1swMHQtCmOzjRl7zt5AuPmuC6r1h9LrTT1rDCvu5ZtKXpfgoi+gZwnSySG3oKkwPFX5/rxdUoQUGl+Z0RqqlLzSC3decmvUpXTceBV5sLuvj4izUTJ57KKIXD5XxbNmQ9raToX2R3bAu0fKJaCkwqjHzDS1EWc6jJh2YQVchCjypujdye6jUMR83M8vwolXNwm/jMLXy3Otn1/+bQAuU3YQg9N48FYKBsDIC9ARSWOlRqDnXkXGMtpHuKniLhWrgV9UUQiqygWApRLH4wIDAQAB",
+  "permissions": [
+    "downloads",
+    "nativeMessaging",
+    "storage",
+    "notifications",
+    "contextMenus",
+    "webRequest"
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.mjs",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "PCL 下载助手",
+    "default_popup": "popup.html"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

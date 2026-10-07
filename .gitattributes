@@ -1,0 +1,3 @@
+# Preserve exact bytes for SHA256SUMS.txt and Windows script encodings.
+* -text
+*.png binary

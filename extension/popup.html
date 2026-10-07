@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>PCL 下载助手</title><link rel="stylesheet" href="popup.css"></head>
+<body><header><img src="icons/icon48.png" width="36" height="36" alt=""><div><h1>PCL 下载助手</h1><p>Edge → 百宝箱 → 多线程下载</p></div></header>
+<main>
+<button id="test" class="primary">检测百宝箱并启用接管</button>
+<p id="status" role="status">首次使用前，请先运行安装包里的 Install.cmd。</p>
+<label class="switch"><input type="checkbox" id="enabled">自动接管普通直链下载</label>
+<p class="hint">保存位置跟随 PCL 百宝箱的“保存到”目录。登录下载、表单下载、blob 链接和未识别的请求继续由 Edge 处理。接管时请暂时不要操作 PCL。</p>
+<div class="settings"><label>最小文件大小（MB；0 表示不限）<input type="number" id="minMB" min="0" max="100000" step="1"></label><label>不接管这些域名（每行一个）<textarea id="excludedHosts" rows="2" placeholder="example.com"></textarea></label><button id="save">保存设置</button></div>
+<h2>最近 Edge 下载</h2><p id="decision" class="hint">点击下载后，可在这里查看最终链接与未接管原因。</p><button id="refresh">刷新下载记录</button><div id="downloads"></div>
+<h2>最近任务</h2><div id="jobs"></div>
+<p class="hint">“已建立任务”表示交接成功，最终下载结果请在 PCL 查看。恢复 Edge 前，请先取消 PCL 中同一任务。</p>
+<footer>实验版 0.1.2 · 针对 PCL 2.13.0.1 制作<br>扩展 ID：<code id="extid"></code></footer>
+</main><script type="module" src="popup.mjs"></script></body></html>
