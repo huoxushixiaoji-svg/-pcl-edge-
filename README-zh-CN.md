@@ -1,6 +1,8 @@
 # Edge 独立多线程下载助手 0.2.0
 
-本项目把 Edge 中符合条件的公开 HTTP/HTTPS 下载交给本机独立下载器。它不再依赖、启动或操作 PCL，也未包含 PCL 源码或二进制文件。
+将 Edge 中符合条件的公开直链交给本机下载器，通过 HTTP Range 分段下载并自动合并文件。项目完全独立运行，无需安装或启动 PCL，也不包含 PCL 源码或二进制文件。
+
+[下载 v0.2.0](https://github.com/huoxushixiaoji-svg/-pcl-edge-/archive/refs/tags/v0.2.0.zip)
 
 扩展先检查下载方式、最终链接、浏览器风险状态和敏感请求头；符合条件时暂停 Edge 任务。本机程序确认独立任务已经创建后，扩展才取消 Edge 原任务。服务器支持 HTTP Range 时最多使用 8 个分段，不支持时自动退回单连接下载。
 
