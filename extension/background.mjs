@@ -8,7 +8,7 @@ const checking = new Set();
 const recheck = new Set();
 const candidates = new Map();
 let chain = Promise.resolve();
-const menuId = 'send-to-pcl';
+const menuId = 'send-to-independent-downloader';
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local') for (const name of Object.keys(DEFAULTS)) {
@@ -50,7 +50,7 @@ async function save(job) {
   await chrome.storage.local.set({['job:' + job.key]: job});
   await chrome.action.setBadgeText({text: ['uncertain','cancel_failed','resume_failed'].includes(job.state) ? '!' : ''});
   if (['failed','uncertain','cancel_failed','resume_failed'].includes(job.state)) {
-    await chrome.notifications.create('pcl:' + job.key, {type: 'basic', iconUrl: 'icons/icon128.png', title: 'PCL 下载助手', message: job.message}).catch(() => {});
+    await chrome.notifications.create('edge-download:' + job.key, {type: 'basic', iconUrl: 'icons/icon128.png', title: '独立下载助手', message: job.message}).catch(() => {});
   }
 }
 async function cleanup() {
@@ -68,19 +68,19 @@ async function run(job) {
       await save({...job, state:'skipped', message:'Edge 任务已改变，取消本次交接。'}); return;
     }
   }
-  await save({...job, state:'sending', message:'正在打开 PCL 百宝箱……'});
+  await save({...job, state:'sending', message:'正在启动独立下载任务……'});
   let response;
   try {
-    response = await nativeCall(chrome, {action:'download', requestId:job.key, url:job.url, filename:job.filename});
+    response = await nativeCall(chrome, {action:'download', requestId:job.key, jobId:job.nativeJobId, url:job.url, filename:job.filename});
   } catch (e) {
-    response = {status:'uncertain', message:'本机连接失败：' + e.message + ' 请检查 PCL，再选择如何处理原任务。'};
+    response = {status:'uncertain', message:'本机连接失败：' + e.message + ' 请检查输出目录，再选择如何处理原任务。'};
   }
   await settle(chrome, job, response, save);
   await cleanup();
 }
 function enqueue(job) {
   chain = chain.then(() => run(job)).catch(async error => {
-    await save({...job, state:'uncertain', message:'交接中断：' + error.message + '。请检查 PCL 和 Edge 下载列表。'});
+    await save({...job, state:'uncertain', message:'交接中断：' + error.message + '。请检查输出目录和 Edge 下载列表。'});
   }).finally(() => working.delete(job.key));
 }
 
@@ -113,7 +113,7 @@ async function accept(snapshot, {manual=false}={}) {
     await recordDecision(item,decision);
     if (!decision.eligible) return {ok:false,message:decision.message};
     working.add(key);
-    let job = {key, downloadId:item.id, url:item.finalUrl || item.url, filename:safeName(item.filename,item.finalUrl || item.url), manual, state:'preparing', message:'准备交接……'};
+    let job = {key, nativeJobId:crypto.randomUUID(), downloadId:item.id, url:item.finalUrl || item.url, filename:safeName(item.filename,item.finalUrl || item.url), manual, state:'preparing', message:'准备交接……'};
     // Persist before pause so a worker restart never loses the recovery entry.
     await save(job);
     try { await chrome.downloads.pause(item.id); }
@@ -131,9 +131,9 @@ async function accept(snapshot, {manual=false}={}) {
       await settle(chrome,job,{status:'failed',safeToResume:true,message},save);
       working.delete(key); return {ok:false,message};
     }
-    job = {...job, url:current.finalUrl || current.url, filename:safeName(current.filename || item.filename,current.finalUrl || current.url), state:'queued',message:'等待交给 PCL……'};
+    job = {...job, url:current.finalUrl || current.url, filename:safeName(current.filename || item.filename,current.finalUrl || current.url), state:'queued',message:'等待独立下载器接收……'};
     await save(job); enqueue(job);
-    return {ok:true,message:'已读取 Edge 最终下载链接，正在交给 PCL。'};
+    return {ok:true,message:'已读取 Edge 最终下载链接，正在交给独立下载器。'};
   } catch (error) {
     working.delete(key);
     const job = (await chrome.storage.local.get('job:' + key))['job:' + key];
@@ -147,7 +147,7 @@ async function accept(snapshot, {manual=false}={}) {
   }
 }
 function inspect(item) { accept(item).catch(e => {
-  console.warn('PCL handoff failed', e.message);
+  console.warn('Independent download handoff failed', e.message);
 }); }
 chrome.downloads.onCreated.addListener(item => {
   const now = Date.now();
@@ -167,25 +167,44 @@ chrome.downloads.onChanged.addListener(delta => {
 chrome.contextMenus.onClicked.addListener(info => {
   if (info.menuItemId !== menuId || !httpUrl(info.linkUrl)) return;
   const key = 'manual-' + crypto.randomUUID();
-  const job = {key, url:info.linkUrl, filename:safeName('',info.linkUrl), state:'queued',message:'等待交给 PCL……'};
+  const job = {key, nativeJobId:crypto.randomUUID(), url:info.linkUrl, filename:safeName('',info.linkUrl), state:'queued',message:'等待独立下载器接收……'};
   working.add(key); save(job).then(() => enqueue(job));
 });
-chrome.runtime.onInstalled.addListener(async () => {
+chrome.runtime.onInstalled.addListener(async details => {
   await ready;
   await chrome.contextMenus.removeAll();
-  chrome.contextMenus.create({id:menuId,title:'使用 PCL 下载此直链',contexts:['link'],targetUrlPatterns:['http://*/*','https://*/*']});
+  chrome.contextMenus.create({id:menuId,title:'使用独立下载器下载此直链',contexts:['link'],targetUrlPatterns:['http://*/*','https://*/*']});
+  if (details?.reason === 'update' && details.previousVersion?.startsWith('0.1.')) {
+    const old = await chrome.storage.local.get(null);
+    await chrome.storage.local.remove(Object.keys(old).filter(key => key.startsWith('job:')));
+  }
 });
+
+async function refreshNativeJobs() {
+  const data = await chrome.storage.local.get(null);
+  for (const [key, job] of Object.entries(data)) {
+    if (!key.startsWith('job:') || job.state !== 'downloading' || !job.nativeJobId) continue;
+    try {
+      const result = await nativeCall(chrome,{action:'status',requestId:crypto.randomUUID(),jobId:job.nativeJobId},10000);
+      if (result.jobState === 'completed') await save({...job,state:'completed',message:'下载完成。',outputPath:result.outputPath});
+      else if (result.jobState === 'failed' || result.jobState === 'canceled') await save({...job,state:result.jobState,message:result.message || '独立下载未完成。',outputPath:result.outputPath});
+    } catch { /* A later alarm retries without changing a running job. */ }
+  }
+}
+chrome.alarms.create('refresh-native-downloads',{periodInMinutes:0.5});
+chrome.alarms.onAlarm.addListener(alarm => { if (alarm.name === 'refresh-native-downloads') refreshNativeJobs(); });
 
 // Service-worker/browser recovery never replays a potentially submitted task.
 async function recover() {
   const data = await chrome.storage.local.get(null);
   for (const [key, job] of Object.entries(data)) {
     if (key.startsWith('job:') && ['preparing','queued','sending'].includes(job.state) && !working.has(job.key)) {
-      await save({...job,state:'uncertain',message:'浏览器或扩展曾重启，请检查 PCL 后恢复 Edge 或保留 PCL。'});
+      await save({...job,state:'uncertain',message:'浏览器或扩展曾重启，请检查输出目录后恢复 Edge 或保留独立下载。'});
     }
   }
 }
 const recovered = recover();
+recovered.then(refreshNativeJobs);
 
 chrome.runtime.onMessage.addListener((message, sender, reply) => {
   if (sender.id !== chrome.runtime.id) return false;
@@ -196,7 +215,6 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       return await accept({id:message.downloadId},{manual:true});
     }
     if (message.action === 'test') {
-      // Serialize all native UI operations with actual downloads.
       const task = chain.then(() => nativeCall(chrome,{action:'test',requestId:crypto.randomUUID()}));
       chain = task.catch(() => {});
       return await task;
@@ -206,11 +224,14 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       const job = (await chrome.storage.local.get(key))[key];
       if (!job || !['uncertain','cancel_failed','resume_failed'].includes(job.state)) throw new Error('任务仍在处理中，请稍候。');
       if (job.downloadId != null) {
-        if (message.choice === 'edge') await chrome.downloads.resume(job.downloadId);
-        else if (message.choice === 'pcl') await chrome.downloads.cancel(job.downloadId);
+        if (message.choice === 'edge') {
+          if (job.nativeJobId) await nativeCall(chrome,{action:'cancel',requestId:crypto.randomUUID(),jobId:job.nativeJobId},10000).catch(()=>{});
+          await chrome.downloads.resume(job.downloadId);
+        }
+        else if (message.choice === 'native') await chrome.downloads.cancel(job.downloadId);
         else throw new Error('无效选择');
       }
-      await save({...job,state:'resolved',message:message.choice === 'edge' ? '已恢复 Edge，请确保 PCL 中没有重复任务。' : '已保留 PCL；原 Edge 任务已取消。'});
+      await save({...job,state:'resolved',message:message.choice === 'edge' ? '已请求停止独立下载并恢复 Edge。' : '已保留独立下载；原 Edge 任务已取消。'});
       return {ok:true};
     }
     throw new Error('不支持的操作');

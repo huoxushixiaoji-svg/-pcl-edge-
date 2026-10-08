@@ -1,19 +1,13 @@
 ﻿$ErrorActionPreference = 'Stop'
 try {
-    $destination = Join-Path $env:LOCALAPPDATA 'PclEdgeBridge'
-    $subKey = 'Software\Microsoft\Edge\NativeMessagingHosts\com.local.pcl_download_bridge'
-    [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKey($subKey,$false)
-    foreach ($name in @('extension','reservations')) {
-        $path = Join-Path $destination $name
-        if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
-    }
-    foreach ($name in @('Bridge.exe','Bridge.exe.config','Bridge.new.exe','config.json','com.local.pcl_download_bridge.json')) {
-        $path = Join-Path $destination $name
-        if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
-    }
-    Write-Host '本机连接已卸载。请在 edge://extensions 删除“PCL 百宝箱下载助手”。' -ForegroundColor Green
-    Write-Host 'PCL 主程序和已经下载的文件均保留。'
-    Write-Host ('安装目录中只保留卸载脚本，可手动删除：' + $destination)
+    $destination = Join-Path $env:LOCALAPPDATA 'EdgeMultiDownload'
+    $legacyDestination = Join-Path $env:LOCALAPPDATA 'PclEdgeBridge'
+    [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKey('Software\Microsoft\Edge\NativeMessagingHosts\com.local.edge_multi_download',$false)
+    [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKey('Software\Microsoft\Edge\NativeMessagingHosts\com.local.pcl_download_bridge',$false)
+    if (Test-Path -LiteralPath $destination) { Remove-Item -LiteralPath $destination -Recurse -Force }
+    if (Test-Path -LiteralPath $legacyDestination) { Remove-Item -LiteralPath $legacyDestination -Recurse -Force }
+    Write-Host '独立下载器及旧 PCL 桥接组件已卸载。请在 edge://extensions 删除扩展。' -ForegroundColor Green
+    Write-Host '已完成的下载文件和 PCL 主程序均未删除。'
 } catch {
     Write-Host ('卸载未完成：' + $_.Exception.Message + '。请关闭 Edge 后重试。') -ForegroundColor Red
     exit 1

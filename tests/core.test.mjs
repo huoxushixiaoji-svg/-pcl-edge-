@@ -41,9 +41,9 @@ function harness(fail={}) {
   return {api,calls,save:async value=>{stored=value;},get stored(){return stored;}};
 }
 const job={key:'1',downloadId:1,filename:'a.zip'};
-test('Edge is canceled only on a confirmed PCL task',async()=>{
+test('Edge is canceled only after the native task is confirmed',async()=>{
   const h=harness();await settle(h.api,job,{status:'submitted',outputPath:'D:\\a.zip'},h.save);
-  assert.deepEqual(h.calls,[['cancel',1]]);assert.equal(h.stored.state,'submitted');
+  assert.deepEqual(h.calls,[['cancel',1]]);assert.equal(h.stored.state,'downloading');
 });
 test('a provably pre-submission failure resumes Edge',async()=>{
   const h=harness();await settle(h.api,job,{status:'failed',safeToResume:true},h.save);
@@ -59,7 +59,7 @@ test('cancel and resume errors retain visible recovery actions',async()=>{
   const h2=harness({resume:true});await settle(h2.api,job,{status:'failed',safeToResume:true},h2.save);assert.equal(h2.stored.state,'resume_failed');
 });
 test('manual link handoff never touches browser downloads',async()=>{
-  const h=harness();await settle(h.api,{key:'manual'}, {status:'submitted'},h.save);assert.deepEqual(h.calls,[]);assert.equal(h.stored.state,'submitted');
+  const h=harness();await settle(h.api,{key:'manual'}, {status:'submitted'},h.save);assert.deepEqual(h.calls,[]);assert.equal(h.stored.state,'downloading');
 });
 function fakePort(){
   const listeners={};return {listeners, onMessage:{addListener:f=>listeners.message=f},onDisconnect:{addListener:f=>listeners.disconnect=f},postMessage:m=>{listeners.sent=m;},disconnect:()=>{listeners.closed=true;}};

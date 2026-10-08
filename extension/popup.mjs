@@ -26,7 +26,7 @@ async function render() {
     if(job.outputPath){const path=document.createElement('p');path.className='path';path.textContent=job.outputPath;card.append(path);}
     if(unresolved.includes(job)) {
       card.classList.add('warn');const buttons=document.createElement('div');buttons.className='buttons';
-      for(const [choice,label] of [['edge','恢复 Edge'],['pcl','保留 PCL']]){
+      for(const [choice,label] of [['edge','恢复 Edge'],['native','保留独立下载']]){
         const btn=document.createElement('button');btn.textContent=label;
         btn.onclick=async()=>{
           btn.disabled=true;
@@ -56,26 +56,26 @@ async function render() {
       try { await navigator.clipboard.writeText(url);status('已复制 Edge 的最终下载链接。'); }
       catch { details.open=true;link.focus();link.select();status('请按 Ctrl+C 复制选中的下载链接。'); }
     };buttons.append(copy);
-    const send=document.createElement('button');send.textContent='尝试用 PCL 接管';send.disabled=!!job || !downloadDecision(item).eligible || !httpUrl(url);
+    const send=document.createElement('button');send.textContent='尝试独立下载';send.disabled=!!job || !downloadDecision(item).eligible || !httpUrl(url);
     send.onclick=async()=>{
-      if(!confirm('PCL 只接收下载链接，不携带 Edge 的 Cookie、登录信息或表单内容。请确认这是无需登录的公开直链。是否暂停这条 Edge 下载并尝试交给 PCL？'))return;
+      if(!confirm('独立下载器只接收链接，不携带 Edge 的 Cookie、登录信息或表单内容。请确认这是无需登录的公开直链。是否暂停 Edge 下载并交给独立下载器？'))return;
       send.disabled=true;
-      try { const result=await chrome.runtime.sendMessage({action:'sendDownload',downloadId:item.id,confirmed:true});status(result.message || '正在交给 PCL。'); }
+      try { const result=await chrome.runtime.sendMessage({action:'sendDownload',downloadId:item.id,confirmed:true});status(result.message || '正在交给独立下载器。'); }
       catch(e){status(e.message);}finally{await render();}
     };buttons.append(send);card.append(buttons);$('downloads').append(card);
   }
 }
 $('test').onclick=async()=>{
-  $('test').disabled=true;status('正在打开 PCL 并检查百宝箱，请暂时不要操作鼠标键盘……');
+  $('test').disabled=true;status('正在检查本机独立下载器……');
   try {
     const r=await chrome.runtime.sendMessage({action:'test'});
-    if(r.ok && r.folderSource==='pcl'){
+    if(r.ok && r.downloadFolder){
       await chrome.storage.local.set({enabled:true});$('enabled').checked=true;
-      status('检测通过，已启用自动接管。跟随 PCL 百宝箱“保存到”：'+r.downloadFolder);
+      status('检测通过，已启用自动接管。保存到：'+r.downloadFolder+'；最多 '+r.connections+' 个分段。');
     }
     else if(r.ok){
       await chrome.storage.local.set({enabled:false});$('enabled').checked=false;
-      status('连接程序还是旧版，请运行新安装包里的 Update.cmd，再重新检测。');
+      status('连接程序版本不匹配，请运行新安装包里的 Update.cmd。');
     }
     else status(r.message||'检测失败，请检查本机连接程序。');
   }catch(e){status(e.message);}finally{$('test').disabled=false;}

@@ -1,31 +1,13 @@
-﻿PCL 百宝箱下载助手（Edge 实验版 0.1.2）
-
-已经安装旧版：
-1. 先关闭扩展的“自动接管”，等待交接结束，再完整解压修正版。
-2. 双击 Update.cmd，不用重新选择 PCL。
-3. 打开 edge://extensions，点击此扩展的“重新加载”（圆形箭头）。
-4. 在 PCL 百宝箱确认“保存到”目录，再到扩展里重新检测并启用。
+﻿Edge 独立多线程下载助手 0.2.0
 
 首次安装：
+1. 完整解压安装包，双击 Install.cmd。
+2. 选择下载保存目录。
+3. 在 Edge 打开 edge://extensions，开启开发人员模式并选择“加载解压缩的扩展”。
+4. 选择 %LOCALAPPDATA%\EdgeMultiDownload\extension。
+5. 打开扩展，点击“检测本机下载器并启用接管”。
 
-1. 将压缩包全部解压。
-2. 先手动运行一次 PCL，完成首次提示，确认能打开“更多 → 百宝箱”。
-3. 双击 Install.cmd，选择你的 Plain Craft Launcher 2.exe。
-4. 在 Edge 打开 edge://extensions，开启开发人员模式，点击“加载解压缩的扩展”。
-5. 选择 %LOCALAPPDATA%\PclEdgeBridge\extension 文件夹。
-6. 打开扩展弹窗，点击“检测百宝箱并启用接管”。
+旧版更新：双击 Update.cmd，然后在 edge://extensions 删除失效的旧扩展，并从 %LOCALAPPDATA%\EdgeMultiDownload\extension 重新加载。安装成功后会清理旧桥接组件，不会删除 PCL 或已下载文件。
 
-下载保存到：PCL“更多 → 百宝箱 → 下载自定义文件”里“保存到”指定的目录。
-每次都会读取当前 PCL 设置；要换目录，直接在 PCL 的“保存到”旁边点击“选择”。
-交接时 PCL 会弹到前台，请暂时不要操作鼠标键盘。
-如提示无法确认，请先查看 PCL 任务，再选择“保留 PCL”或“恢复 Edge”。
-只有普通公开 HTTP/HTTPS 直链适合自动接管；登录、网盘和网页导出通常继续由 Edge 下载。
-
-这是未在 Windows 实机完成端到端测试的实验版。
-请先通过检测，再用一个小型公开文件试用；最终下载结果在 PCL 查看。
-完整说明见 README-zh-CN.md（可用记事本打开）。
-Windows 10/11 64 位，.NET Framework 4.8，Windows PowerShell 5.1。
-卸载使用 Uninstall.cmd，然后到 Edge 删除扩展。
-
-下载没有交给 PCL：打开扩展的“最近 Edge 下载”，刷新并查看原因及最终链接。
-可复制链接；确认无需登录的公开直链后，可对仍在下载的文件选择“尝试用 PCL 接管”。
+只接管无需登录的公开 HTTP/HTTPS 直链；登录、POST、blob、网页导出和可疑任务继续由 Edge 下载。
+卸载请运行 Uninstall.cmd。完整说明见 README-zh-CN.md。
