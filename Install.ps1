@@ -65,7 +65,7 @@ try {
     Write-Host ($(if ($Update) { '更新成功。' } else { '安装成功。' })) -ForegroundColor Green
     Write-Host ('下载保存位置：' + $DownloadFolder)
     Write-Host '独立下载器默认使用最多 8 个分段，不再需要或启动 PCL。'
-    if ($Update) { Write-Host '在 edge://extensions 删除失效的旧版解压扩展，再重新加载下面的新目录：' }
+    if ($Update) { Write-Host '在 edge://extensions 点击已有扩展的重新加载，保留设置及历史；仅旧路径失效时移除后加载下面的新目录：' }
     else { Write-Host '在 edge://extensions 开启开发人员模式，并加载下面的扩展目录：' }
     Write-Host $extension -ForegroundColor Cyan
     Write-Host ('扩展 ID 应为：' + $extensionId)

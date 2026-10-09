@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Edge 独立多线程下载助手",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "将普通 HTTP/HTTPS 下载交给独立本机多线程下载器。",
   "minimum_chrome_version": "120",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsBE4ZbUny660pqmg8igdVWMiidd0jfbG433fbcoL/eEewwFrgu4/gXKePePN8vmiQE0qi1swMHQtCmOzjRl7zt5AuPmuC6r1h9LrTT1rDCvu5ZtKXpfgoi+gZwnSySG3oKkwPFX5/rxdUoQUGl+Z0RqqlLzSC3decmvUpXTceBV5sLuvj4izUTJ57KKIXD5XxbNmQ9raToX2R3bAu0fKJaCkwqjHzDS1EWc6jJh2YQVchCjypujdye6jUMR83M8vwolXNwm/jMLXy3Otn1/+bQAuU3YQg9N48FYKBsDIC9ARSWOlRqDnXkXGMtpHuKniLhWrgV9UUQiqygWApRLH4wIDAQAB",

@@ -4,17 +4,18 @@ import {setTimeout as delay} from 'node:timers/promises';
 
 function event(){const callbacks=[];return {addListener:f=>callbacks.push(f),emit:(...args)=>callbacks.forEach(f=>f(...args))};}
 async function boot(initial={}) {
-  const db={enabled:true,minMB:0,excludedHosts:'',...initial};const downloads=new Map();const calls=[];const ports=[];
+  const db={enabled:true,minMB:0,excludedHosts:'',...initial};const downloads=new Map();const calls=[];const ports=[];const session={};const windows=new Map();
   const chrome={
     storage:{onChanged:event(),local:{
       get:async keys=>keys===null?structuredClone(db):typeof keys==='string'?{[keys]:structuredClone(db[keys])}:Object.fromEntries(Object.entries(keys).map(([k,v])=>[k,db[k]??v])),
-      set:async values=>{Object.assign(db,structuredClone(values));},remove:async keys=>keys.forEach(k=>delete db[k])}},
+      set:async values=>{Object.assign(db,structuredClone(values));},remove:async keys=>keys.forEach(k=>delete db[k])},session:{get:async()=>({...session}),set:async values=>Object.assign(session,values)}},
     downloads:{onCreated:event(),onChanged:event(),pause:async id=>{calls.push(['pause',id]);downloads.get(id).paused=true;},resume:async id=>{calls.push(['resume',id]);downloads.get(id).paused=false;},cancel:async id=>{calls.push(['cancel',id]);downloads.get(id).state='interrupted';},search:async ({id})=>downloads.has(id)?[structuredClone(downloads.get(id))]:[]},
     webRequest:{onBeforeRequest:event(),onBeforeSendHeaders:event(),onHeadersReceived:event()},
     action:{setBadgeText:async()=>{}},notifications:{create:async()=>{}},alarms:{create:()=>{},onAlarm:event()},
     contextMenus:{onClicked:event(),removeAll:async()=>{},create:()=>{}},
-    runtime:{id:'test-extension',onInstalled:event(),onMessage:event(),connectNative:()=>{
-      const port={onMessage:event(),onDisconnect:event(),disconnect:()=>{},postMessage:message=>{port.sent=message;calls.push(['send',message.requestId]);if(message.action==='cancel')queueMicrotask(()=>port.onMessage.emit({requestId:message.requestId,status:'ready'}));}};
+    windows:{get:async id=>{if(!windows.has(id))throw Error('closed');return windows.get(id);},create:async options=>{const win={id:windows.size+1,...options};windows.set(win.id,win);calls.push(['notice',win.id]);return win;}},
+    runtime:{id:'test-extension',getURL:path=>'chrome-extension://test-extension/'+path,onInstalled:event(),onMessage:event(),connectNative:()=>{
+      const port={onMessage:event(),onDisconnect:event(),disconnect:()=>{},postMessage:message=>{port.sent=message;calls.push(['send',message.requestId]);}};
       ports.push(port);return port;
     }}
   };
@@ -33,7 +34,7 @@ async function boot(initial={}) {
   async function waitFor(predicate){for(let i=0;i<100;i++){if(predicate())return;await delay(2);}throw Error('Timed out waiting for test condition');}
   function message(value){return new Promise(resolve=>chrome.runtime.onMessage.emit(value,{id:chrome.runtime.id},resolve));}
   function submitted(index=0){ports[index].onMessage.emit({requestId:ports[index].sent.requestId,status:'submitted',jobId:ports[index].sent.jobId,outputPath:'D:\\file.zip'});}
-  return {chrome,db,downloads,calls,ports,request,download,waitFor,message,submitted};
+  return {chrome,db,downloads,calls,ports,request,download,waitFor,message,submitted,windows};
 }
 test('two downloads are handed to the native downloader strictly one at a time',async()=>{
   const h=await boot();h.download(1,h.request(1));h.download(2,h.request(2));
@@ -157,7 +158,10 @@ test('a preparation exception during manual handoff retains recovery and release
   h.chrome.downloads.search=search;
   const retry=await h.message({action:'sendDownload',downloadId:19,confirmed:true});
   assert.match(retry.message,/已有交接记录/);
-  const resolved=await h.message({action:'resolve',key:'19',choice:'edge'});
+  const resolving=h.message({action:'resolve',key:'19',choice:'edge'});
+  await h.waitFor(()=>h.ports.length===1);
+  h.ports[0].onMessage.emit({requestId:h.ports[0].sent.requestId,ok:true,status:'ready',jobState:'missing'});
+  const resolved=await resolving;
   assert.equal(resolved.ok,true);assert.equal(h.downloads.get(19).paused,false);
 });
 
@@ -173,7 +177,7 @@ test('native task completion is reflected by status polling',async()=>{
   h.chrome.alarms.onAlarm.emit({name:'refresh-native-downloads'});
   await h.waitFor(()=>h.ports.length===2);
   assert.equal(h.ports[1].sent.action,'status');
-  h.ports[1].onMessage.emit({requestId:h.ports[1].sent.requestId,status:'ready',jobState:'completed',outputPath:'D:\\21.zip'});
+  h.ports[1].onMessage.emit({requestId:h.ports[1].sent.requestId,ok:true,status:'ready',jobState:'completed',outputPath:'D:\\21.zip'});
   await h.waitFor(()=>h.db['job:21'].state==='completed');
   assert.equal(h.db['job:21'].outputPath,'D:\\21.zip');
 });

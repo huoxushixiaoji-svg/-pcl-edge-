@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework>
+    <StartupObject>NativeTests</StartupObject><EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup><Compile Include="../../native/DownloaderHost.cs" Link="DownloaderHost.cs"/><Compile Include="NativeTests.cs"/></ItemGroup>
+</Project>

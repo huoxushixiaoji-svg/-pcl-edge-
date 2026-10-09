@@ -1,4 +1,5 @@
 import {DEFAULTS, ACTIVE, handoffDecision, downloadDecision, httpUrl, safeName, nativeCall, settle} from './core.mjs';
+import {RUNNING, TERMINAL, nativeUpdate, taskControls} from './tasks.mjs';
 
 let settings = {...DEFAULTS};
 const ready = chrome.storage.local.get(DEFAULTS).then(value => { settings = value; });
@@ -9,6 +10,29 @@ const recheck = new Set();
 const candidates = new Map();
 let chain = Promise.resolve();
 const menuId = 'send-to-independent-downloader';
+const controlling = new Set();
+let refreshPending, noticeChain = Promise.resolve();
+
+async function openStartNotice(job) {
+  if (!settings.showStartNotice) return;
+  noticeChain = noticeChain.then(async () => {
+    const session = await chrome.storage.session.get('noticeWindowId');
+    if (session.noticeWindowId != null) {
+      try { await chrome.windows.get(session.noticeWindowId); return; }
+      catch { /* The previous notice was closed. */ }
+    }
+    let position = {};
+    try {
+      const parent = await chrome.windows.getLastFocused({windowTypes:['normal']});
+      if (Number.isFinite(parent.left) && Number.isFinite(parent.width)) position = {left:parent.left + Math.max(0,parent.width - 430),top:parent.top + 80};
+    } catch { /* Use the window manager's default placement. */ }
+    const win = await chrome.windows.create({url:chrome.runtime.getURL('popup.html?notice=1'), type:'popup', width:410, height:530, focused:false,...position});
+    await chrome.storage.session.set({noticeWindowId:win.id});
+  }).catch(async () => {
+    await chrome.notifications.create('edge-start:' + job.key, {type:'basic',iconUrl:'icons/icon128.png',title:'开始独立下载',message:job.filename + '；点击扩展图标可查看进度和管理任务。'}).catch(() => {});
+  });
+  await noticeChain;
+}
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local') for (const name of Object.keys(DEFAULTS)) {
@@ -76,6 +100,7 @@ async function run(job) {
     response = {status:'uncertain', message:'本机连接失败：' + e.message + ' 请检查输出目录，再选择如何处理原任务。'};
   }
   await settle(chrome, job, response, save);
+  if (response?.status === 'submitted') await openStartNotice(job);
   await cleanup();
 }
 function enqueue(job) {
@@ -180,16 +205,38 @@ chrome.runtime.onInstalled.addListener(async details => {
   }
 });
 
-async function refreshNativeJobs() {
+function refreshNativeJobs() {
+  if (!refreshPending) refreshPending = pollNativeJobs().finally(() => { refreshPending = null; });
+  return refreshPending;
+}
+async function pollNativeJobs() {
   const data = await chrome.storage.local.get(null);
-  for (const [key, job] of Object.entries(data)) {
-    if (!key.startsWith('job:') || job.state !== 'downloading' || !job.nativeJobId) continue;
+  await Promise.all(Object.entries(data).map(async ([key, job]) => {
+    if (!key.startsWith('job:') || !RUNNING.has(job.state) || !job.nativeJobId || controlling.has(job.key)) return;
     try {
       const result = await nativeCall(chrome,{action:'status',requestId:crypto.randomUUID(),jobId:job.nativeJobId},10000);
-      if (result.jobState === 'completed') await save({...job,state:'completed',message:'下载完成。',outputPath:result.outputPath});
-      else if (result.jobState === 'failed' || result.jobState === 'canceled') await save({...job,state:result.jobState,message:result.message || '独立下载未完成。',outputPath:result.outputPath});
+      const latest = (await chrome.storage.local.get(key))[key];
+      if (!latest || controlling.has(job.key) || latest.updatedAt !== job.updatedAt || latest.state !== job.state) return;
+      const next = nativeUpdate(latest,result);
+      if (next) await save(next);
     } catch { /* A later alarm retries without changing a running job. */ }
-  }
+  }));
+  await cleanup();
+}
+
+async function controlJob(key, action) {
+  if (controlling.has(key)) throw new Error('此任务正在处理控制指令，请稍候。');
+  controlling.add(key);
+  try {
+    const storageKey = 'job:' + key;
+    const job = (await chrome.storage.local.get(storageKey))[storageKey];
+    if (!job || !taskControls(job).some(([name]) => name === action)) throw new Error('任务状态已改变，请刷新后再试。');
+    const result = await nativeCall(chrome,{action,requestId:crypto.randomUUID(),jobId:job.nativeJobId},10000);
+    if (!result.ok) throw new Error(result.message || '本机下载器未接受指令，请运行新版 Update.cmd。');
+    const next = TERMINAL.has(result.jobState) ? nativeUpdate(job,result) : {...job,state:{pause:'pausing',resume:'resuming',cancel:'canceling'}[action],message:{pause:'正在暂停……',resume:'正在继续……',cancel:'正在取消并清理临时文件……'}[action]};
+    if (next) await save(next);
+    return {ok:true};
+  } finally { controlling.delete(key); }
 }
 chrome.alarms.create('refresh-native-downloads',{periodInMinutes:0.5});
 chrome.alarms.onAlarm.addListener(alarm => { if (alarm.name === 'refresh-native-downloads') refreshNativeJobs(); });
@@ -219,19 +266,39 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       chain = task.catch(() => {});
       return await task;
     }
+    if (message.action === 'refreshJobs') { await refreshNativeJobs(); return {ok:true}; }
+    if (message.action === 'controlJob') return await controlJob(String(message.key),message.command);
     if (message.action === 'resolve') {
+      if (!['edge','native'].includes(message.choice)) throw new Error('无效选择');
       const key = 'job:' + String(message.key);
       const job = (await chrome.storage.local.get(key))[key];
       if (!job || !['uncertain','cancel_failed','resume_failed'].includes(job.state)) throw new Error('任务仍在处理中，请稍候。');
+      if (message.choice === 'native' && job.nativeJobId) {
+        const result = await nativeCall(chrome,{action:'status',requestId:crypto.randomUUID(),jobId:job.nativeJobId},10000);
+        const next = nativeUpdate({...job,state:'downloading'},result);
+        if (!next) throw new Error('无法找到或确认独立任务，请先检查本机下载器和输出目录。');
+        if (job.downloadId != null) await chrome.downloads.cancel(job.downloadId);
+        await save(next);return {ok:true};
+      }
+      if (message.choice === 'edge' && job.downloadId == null) throw new Error('此任务没有对应的 Edge 原下载。');
       if (job.downloadId != null) {
         if (message.choice === 'edge') {
-          if (job.nativeJobId) await nativeCall(chrome,{action:'cancel',requestId:crypto.randomUUID(),jobId:job.nativeJobId},10000).catch(()=>{});
+          if (job.nativeJobId) {
+            const result = await nativeCall(chrome,{action:'status',requestId:crypto.randomUUID(),jobId:job.nativeJobId},10000);
+            if (!result.ok) throw new Error(result.message || '无法确认本机任务状态，请先检查下载器。');
+            if (!['canceled','failed','missing'].includes(result.jobState)) {
+              if (result.jobState === 'completed') throw new Error('独立下载已完成，请选择保留独立下载。');
+              const stop = await nativeCall(chrome,{action:'cancel',requestId:crypto.randomUUID(),jobId:job.nativeJobId},10000);
+              if (!stop.ok) throw new Error(stop.message || '无法停止本机任务。');
+              throw new Error('正在停止独立任务，请稍后再次点击恢复 Edge。');
+            }
+          }
           await chrome.downloads.resume(job.downloadId);
         }
         else if (message.choice === 'native') await chrome.downloads.cancel(job.downloadId);
         else throw new Error('无效选择');
       }
-      await save({...job,state:'resolved',message:message.choice === 'edge' ? '已请求停止独立下载并恢复 Edge。' : '已保留独立下载；原 Edge 任务已取消。'});
+      await save({...job,state:'resolved',message:message.choice === 'edge' ? '已恢复 Edge。' : '已保留独立下载；原 Edge 任务已取消。'});
       return {ok:true};
     }
     throw new Error('不支持的操作');

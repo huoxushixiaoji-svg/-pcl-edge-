@@ -1,13 +1,17 @@
-﻿Edge 独立多线程下载助手 0.2.0
+﻿Edge 独立多线程下载助手 0.3.0
 
 首次安装：
 1. 完整解压安装包，双击 Install.cmd。
 2. 选择下载保存目录。
 3. 在 Edge 打开 edge://extensions，开启开发人员模式并选择“加载解压缩的扩展”。
 4. 选择 %LOCALAPPDATA%\EdgeMultiDownload\extension。
-5. 打开扩展，点击“检测本机下载器并启用接管”。
+5. 打开扩展，点击右上角 ⋯ → 设置，再点击“检测本机下载器并启用接管”。
 
-旧版更新：双击 Update.cmd，然后在 edge://extensions 删除失效的旧扩展，并从 %LOCALAPPDATA%\EdgeMultiDownload\extension 重新加载。安装成功后会清理旧桥接组件，不会删除 PCL 或已下载文件。
+旧版更新：先等待任务完成或取消，双击 Update.cmd，再在 edge://extensions 点击已有扩展的“重新加载”，保留设置及下载历史。仅旧的 0.1.x 路径失效时需要删除旧扩展并从 %LOCALAPPDATA%\EdgeMultiDownload\extension 重新加载。
+
+主界面显示任务进度，可逐个暂停、继续、取消。设置和历史记录位于右上角 ⋯ 菜单。
+下载开始自动弹出提示窗，点击 × 可关闭，下载继续；可在设置中关闭后续提示。
+提示窗属于扩展，不写入 Edge 内置下载面板。暂停后继续需要本机工作进程仍存活，不支持重启 Windows 后续传。
 
 只接管无需登录的公开 HTTP/HTTPS 直链；登录、POST、blob、网页导出和可疑任务继续由 Edge 下载。
 卸载请运行 Uninstall.cmd。完整说明见 README-zh-CN.md。

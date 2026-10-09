@@ -12,8 +12,8 @@
 *.pdb
 
 # Build and editor output
-/bin/
-/obj/
+bin/
+obj/
 /dist/
 /node_modules/
 /coverage/

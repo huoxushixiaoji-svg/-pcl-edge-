@@ -1,6 +1,6 @@
 export const HOST = 'com.local.edge_multi_download';
-export const DEFAULTS = {enabled: false, minMB: 0, excludedHosts: ''};
-export const ACTIVE = new Set(['preparing', 'queued', 'sending', 'downloading', 'uncertain', 'cancel_failed', 'resume_failed']);
+export const DEFAULTS = {enabled: false, minMB: 0, excludedHosts: '', showStartNotice: true};
+export const ACTIVE = new Set(['preparing', 'queued', 'sending', 'downloading', 'paused', 'pausing', 'resuming', 'canceling', 'uncertain', 'cancel_failed', 'resume_failed']);
 
 export function httpUrl(value) {
   try {
@@ -88,7 +88,7 @@ export function nativeCall(api, message, timeoutMs = 90000) {
   });
 }
 
-// The native host distinguishes failures before Enter from uncertain results after Enter.
+// Only a confirmed worker receipt permits canceling the original Edge download.
 export async function settle(api, job, response, save) {
   if (response?.status === 'submitted') {
     if (job.downloadId != null) {

@@ -1,14 +1,19 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>独立下载助手</title><link rel="stylesheet" href="popup.css"></head>
-<body><header><img src="icons/icon48.png" width="36" height="36" alt=""><div><h1>独立下载助手</h1><p>Edge → 本机多线程下载</p></div></header>
+<body>
+<header><img src="icons/icon48.png" width="28" height="28" alt=""><div><h1 id="heading">下载</h1><p id="subtitle">独立多线程下载助手</p></div><div class="header-actions"><button id="menu-toggle" aria-label="更多菜单" aria-expanded="false" aria-controls="menu">⋯</button><button id="close" aria-label="关闭下载提示" hidden>×</button></div></header>
+<nav id="menu" aria-label="更多功能" hidden><button data-page="settings">设置<span>接管规则与提示</span></button><button data-page="history">下载历史<span>独立任务与 Edge 记录</span></button></nav>
 <main>
+<button id="back" class="back" hidden>← 返回下载</button>
+<p id="status" role="status" hidden></p>
+<section id="page-downloads"><div class="section-title"><span id="task-count">当前任务</span><button id="refresh-jobs" class="text-button">刷新</button></div><div id="jobs"></div><p class="hint">关闭提示或扩展面板后，下载仍在本机继续。</p><button id="empty-setup" class="primary" data-page="settings" hidden>设置本机下载器</button></section>
+<section id="page-settings" hidden>
 <button id="test" class="primary">检测本机下载器并启用接管</button>
-<p id="status" role="status">首次使用前，请先运行安装包里的 Install.cmd。</p>
+<p class="hint">首次安装运行 Install.cmd，升级运行 Update.cmd，然后在 edge://extensions 重新加载扩展。</p>
 <label class="switch"><input type="checkbox" id="enabled">自动接管普通直链下载</label>
-<p class="hint">保存位置在安装或更新时选择。登录下载、表单下载、blob 链接和未识别的请求继续由 Edge 处理。</p>
-<div class="settings"><label>最小文件大小（MB；0 表示不限）<input type="number" id="minMB" min="0" max="100000" step="1"></label><label>不接管这些域名（每行一个）<textarea id="excludedHosts" rows="2" placeholder="example.com"></textarea></label><button id="save">保存设置</button></div>
-<h2>最近 Edge 下载</h2><p id="decision" class="hint">点击下载后，可在这里查看最终链接与未接管原因。</p><button id="refresh">刷新下载记录</button><div id="downloads"></div>
-<h2>最近任务</h2><div id="jobs"></div>
-<p class="hint">下载由本机组件独立完成，失败任务会在这里显示。</p>
-<footer>独立版 0.2.0<br>扩展 ID：<code id="extid"></code></footer>
+<div class="settings"><label>最小文件大小（MB；0 表示不限）<input type="number" id="minMB" min="0" max="100000" step="1"></label><label>不接管这些域名（每行一个）<textarea id="excludedHosts" rows="3" placeholder="example.com"></textarea></label><label class="switch"><input type="checkbox" id="showStartNotice">下载开始时弹出进度提示</label><button id="save">保存设置</button></div>
+<p class="hint">保存位置在安装或更新时选择。登录下载、表单下载、blob 链接继续由 Edge 处理。</p>
+<footer>独立版 <span id="version"></span><br>扩展 ID：<code id="extid"></code></footer>
+</section>
+<section id="page-history" hidden><h2>独立下载历史</h2><div id="history"></div><h2>最近 Edge 下载</h2><p id="decision" class="hint"></p><button id="refresh">刷新 Edge 记录</button><div id="downloads"></div></section>
 </main><script type="module" src="popup.mjs"></script></body></html>

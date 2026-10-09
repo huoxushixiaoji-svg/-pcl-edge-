@@ -40,6 +40,7 @@ public sealed class JobStatus {
     public string outputPath { get; set; }
     public long downloadedBytes { get; set; }
     public long totalBytes { get; set; }
+    public long bytesPerSecond { get; set; }
     public long updatedUtcMs { get; set; }
 }
 public sealed class ProbeResult {
@@ -54,7 +55,7 @@ public static class DownloaderHost {
     static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = 262144 };
     static readonly DateTime Epoch = new DateTime(1970,1,1,0,0,0,DateTimeKind.Utc);
     const int MaxFrame = 262144;
-    const string Version = "0.2.0";
+    const string Version = "0.3.0";
     const uint CREATE_BREAKAWAY_FROM_JOB = 0x01000000;
     const uint CREATE_NO_WINDOW = 0x08000000;
     const uint DETACHED_PROCESS = 0x00000008;
@@ -117,9 +118,16 @@ public static class DownloaderHost {
         }
         ValidateJobId(r.jobId);
         if (r.action == "status") return StatusResult(r,ReadStatus(r.jobId));
-        if (r.action == "cancel") {
-            File.WriteAllText(CancelPath(r.jobId),"cancel",Encoding.ASCII);
-            return Result(r,"ready",true,"已请求停止独立下载任务。",false);
+        if (r.action == "cancel" || r.action == "pause" || r.action == "resume") {
+            JobStatus current = ReadStatus(r.jobId);
+            if (current == null) return Result(r,"failed",false,"未找到任务，请刷新任务状态。",false);
+            if (!new[]{"queued","downloading","paused"}.Contains(current.state)) return StatusResult(r,current);
+            if (r.action == "cancel") File.WriteAllText(CancelPath(r.jobId),"cancel",Encoding.ASCII);
+            else if (r.action == "pause") File.WriteAllText(PausePath(r.jobId),"pause",Encoding.ASCII);
+            else File.Delete(PausePath(r.jobId));
+            Dictionary<string,object> result = Result(r,"ready",true,"已发送任务控制指令。",false);
+            result["jobState"] = r.action == "pause" ? "pausing" : r.action == "resume" ? "resuming" : "canceling";
+            return result;
         }
         if (r.action != "download") throw new Exception("不支持的操作。");
         ValidateUrl(r.url); Directory.CreateDirectory(config.downloadFolder); CheckWritable(config.downloadFolder);
@@ -129,7 +137,7 @@ public static class DownloaderHost {
                 try { held = mutex.WaitOne(3000); } catch (AbandonedMutexException) { held = true; }
                 if (!held) throw new Exception("本机下载器正忙，请稍后重试。");
                 JobStatus existing = ReadStatus(r.jobId);
-                if (existing != null && new[]{"queued","downloading","completed"}.Contains(existing.state)) return Accepted(r,existing);
+                if (existing != null) return Accepted(r,existing);
                 string reservation; string output = ReserveOutput(config.downloadFolder,SafeName(r.filename),out reservation);
                 JobSpec spec = new JobSpec { jobId=r.jobId,url=r.url,outputPath=output,reservationPath=reservation,connections=config.connections };
                 WriteJsonAtomic(JobPath(r.jobId),spec);
@@ -147,7 +155,7 @@ public static class DownloaderHost {
     static Dictionary<string,object> StatusResult(HostRequest r,JobStatus status) {
         Dictionary<string,object> result = Result(r,"ready",true,status == null ? "未找到任务。" : status.message,true);
         result["jobId"] = r.jobId; result["jobState"] = status == null ? "missing" : status.state;
-        if (status != null) { result["outputPath"] = status.outputPath; result["downloadedBytes"] = status.downloadedBytes; result["totalBytes"] = status.totalBytes; }
+        if (status != null) { result["outputPath"] = status.outputPath; result["downloadedBytes"] = status.downloadedBytes; result["totalBytes"] = status.totalBytes; result["bytesPerSecond"] = status.bytesPerSecond; }
         return result;
     }
 
@@ -161,49 +169,105 @@ public static class DownloaderHost {
     }
     static void RunWorker(string jobFile) {
         JobSpec spec = Json.Deserialize<JobSpec>(File.ReadAllText(jobFile,Encoding.UTF8)); ValidateJobId(spec.jobId); ValidateUrl(spec.url);
-        try {
+        using (WorkerControl control = new WorkerControl(spec)) try {
             ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
-            WriteStatus(NewStatus(spec,"downloading","正在下载。",0,-1));
-            Download(spec);
+            control.Start();
+            Download(spec,control);
             long length = new FileInfo(spec.outputPath).Length;
-            WriteStatus(NewStatus(spec,"completed","下载完成。",length,length));
-        } catch (OperationCanceledException) {
-            WriteStatus(NewStatus(spec,"canceled","下载已停止。",0,-1));
+            control.Finish("completed","下载完成。",length,length);
         } catch (Exception e) {
-            WriteStatus(NewStatus(spec,"failed","下载失败：" + e.Message,0,-1));
+            // Publish terminal status only after partial files have been removed.
+            TryDelete(TempOutput(spec)); TryDeleteDirectory(PartsDir(spec.jobId));
+            bool canceled = control.Token.IsCancellationRequested || File.Exists(CancelPath(spec.jobId)) || e is OperationCanceledException;
+            control.Finish(canceled ? "canceled" : "failed",canceled ? "已取消下载并清理临时文件。" : "下载失败：" + e.Message);
         } finally {
-            TryDelete(jobFile); TryDelete(spec.reservationPath); TryDelete(CancelPath(spec.jobId));
+            TryDelete(jobFile); TryDelete(spec.reservationPath); TryDelete(CancelPath(spec.jobId)); TryDelete(PausePath(spec.jobId));
             TryDelete(TempOutput(spec)); TryDeleteDirectory(PartsDir(spec.jobId));
         }
     }
-    static void Download(JobSpec spec) {
-        ThrowIfCanceled(spec.jobId);
-        ProbeResult probe = Probe(spec.url,spec.jobId);
+    // One control object owns progress, cooperative pause and cancellation for all parts.
+    sealed class WorkerControl : IDisposable {
+        readonly JobSpec spec;
+        readonly object sync = new object();
+        readonly CancellationTokenSource cancellation = new CancellationTokenSource();
+        Timer timer;
+        long downloaded, total = -1, lastBytes, lastTick = Now();
+        bool finished;
+        public WorkerControl(JobSpec value) { spec = value; }
+        public CancellationToken Token { get { return cancellation.Token; } }
+        public void Start() { Tick(null); timer = new Timer(Tick,null,250,500); }
+        public void SetTotal(long value) { lock(sync) total = value; }
+        public void Add(long value) { lock(sync) downloaded = Math.Max(0,downloaded + value); }
+        public void WriteChunk(Stream output,byte[] buffer,int count,bool countProgress) {
+            while(true) {
+                Gate();
+                lock(sync) {
+                    if(File.Exists(PausePath(spec.jobId))) continue;
+                    Token.ThrowIfCancellationRequested();
+                    if(File.Exists(CancelPath(spec.jobId))) throw new OperationCanceledException();
+                    output.Write(buffer,0,count);
+                    if(countProgress) downloaded+=count;
+                    return;
+                }
+            }
+        }
+        public void Gate() {
+            while(true) {
+                if(File.Exists(CancelPath(spec.jobId))) cancellation.Cancel();
+                Token.ThrowIfCancellationRequested();
+                if(!File.Exists(PausePath(spec.jobId))) return;
+                if(Token.WaitHandle.WaitOne(100)) Token.ThrowIfCancellationRequested();
+            }
+        }
+        void Tick(object unused) {
+            if(File.Exists(CancelPath(spec.jobId))) cancellation.Cancel();
+            lock(sync) {
+                if(finished) return;
+                bool paused = File.Exists(PausePath(spec.jobId));
+                long now=Now(), elapsed=Math.Max(1,now-lastTick);
+                JobStatus status=NewStatus(spec,paused ? "paused" : "downloading",paused ? "已暂停，可继续下载。" : "正在下载。",downloaded,total);
+                status.bytesPerSecond=paused ? 0 : Math.Max(0,(downloaded-lastBytes)*1000/elapsed);
+                lastBytes=downloaded;lastTick=now;
+                try { WriteStatus(status); } catch(IOException) { /* Next tick retries status publishing. */ }
+            }
+        }
+        public void Finish(string state,string message,long bytes=-1,long length=-1) {
+            lock(sync) {
+                finished=true;
+                WriteStatus(NewStatus(spec,state,message,bytes<0 ? downloaded : bytes,length<0 ? total : length));
+            }
+        }
+        public void Dispose() { if(timer!=null) { using(ManualResetEvent done=new ManualResetEvent(false)) { timer.Dispose(done);done.WaitOne(); } } cancellation.Dispose(); }
+    }
+    static void Download(JobSpec spec,WorkerControl control) {
+        control.Gate();
+        ProbeResult probe = Probe(spec.url,control);
+        control.SetTotal(probe.Length);
         int count = probe.SupportsRanges && probe.Length >= 2*1024*1024 ? Math.Min(spec.connections,(int)Math.Max(1,probe.Length/(1024*1024))) : 1;
-        if (count <= 1) { DownloadSingle(spec,probe.Length); return; }
+        if (count <= 1) { DownloadSingle(spec,probe.Length,control); return; }
         string parts = PartsDir(spec.jobId); Directory.CreateDirectory(parts);
         long segment = (probe.Length + count - 1) / count;
         List<Task> tasks = new List<Task>();
         for (int i=0;i<count;i++) {
             int index=i; long start=segment*i; long end=Math.Min(probe.Length-1,start+segment-1);
-            tasks.Add(Task.Run(() => DownloadPart(spec,index,start,end)));
+            tasks.Add(Task.Run(() => DownloadPart(spec,index,start,end,probe.Length,control)));
         }
         try { Task.WaitAll(tasks.ToArray()); }
         catch (AggregateException e) { throw e.Flatten().InnerExceptions.First(); }
-        ThrowIfCanceled(spec.jobId);
+        control.Gate();
         string temp=TempOutput(spec);
         using (FileStream output=new FileStream(temp,FileMode.CreateNew,FileAccess.Write,FileShare.None)) {
-            for(int i=0;i<count;i++) using(FileStream input=File.OpenRead(Path.Combine(parts,"part-"+i))) input.CopyTo(output,1024*1024);
+            for(int i=0;i<count;i++) using(FileStream input=File.OpenRead(Path.Combine(parts,"part-"+i))) Copy(input,output,control,false);
         }
         if(new FileInfo(temp).Length!=probe.Length)throw new IOException("分段合并后的文件大小不一致。");
-        File.Move(temp,spec.outputPath);
+        control.Gate(); File.Move(temp,spec.outputPath);
     }
-    static ProbeResult Probe(string url,string jobId) {
+    static ProbeResult Probe(string url,WorkerControl control) {
         using(HttpClient client=CreateClient()) using(HttpRequestMessage request=new HttpRequestMessage(HttpMethod.Get,url)) {
             request.Headers.Range=new RangeHeaderValue(0,0);
-            using(HttpResponseMessage response=client.SendAsync(request,HttpCompletionOption.ResponseHeadersRead).GetAwaiter().GetResult()) {
-                ThrowIfCanceled(jobId);
-                if(response.StatusCode==HttpStatusCode.PartialContent && response.Content.Headers.ContentRange != null && response.Content.Headers.ContentRange.Length.HasValue)
+            using(HttpResponseMessage response=client.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,control.Token).GetAwaiter().GetResult()) {
+                control.Gate();
+                if(response.StatusCode==HttpStatusCode.PartialContent && response.Content.Headers.ContentRange != null && response.Content.Headers.ContentRange.From==0 && response.Content.Headers.ContentRange.To==0 && response.Content.Headers.ContentRange.Length.HasValue)
                     return new ProbeResult {Length=response.Content.Headers.ContentRange.Length.Value,SupportsRanges=true};
                 if(!response.IsSuccessStatusCode)throw new HttpRequestException("服务器返回 HTTP "+(int)response.StatusCode+"。");
                 return new ProbeResult {Length=response.Content.Headers.ContentLength ?? -1,SupportsRanges=false};
@@ -214,37 +278,48 @@ public static class DownloaderHost {
         HttpClient client=new HttpClient(new HttpClientHandler {AllowAutoRedirect=true,MaxAutomaticRedirections=10,AutomaticDecompression=DecompressionMethods.None,UseCookies=false});
         client.Timeout=TimeSpan.FromMinutes(30); client.DefaultRequestHeaders.UserAgent.ParseAdd("EdgeMultiDownload/"+Version); return client;
     }
-    static void DownloadSingle(JobSpec spec,long expected) {
+    static void DownloadSingle(JobSpec spec,long expected,WorkerControl control) {
         string temp=TempOutput(spec);
-        using(HttpClient client=CreateClient()) using(HttpResponseMessage response=client.GetAsync(spec.url,HttpCompletionOption.ResponseHeadersRead).GetAwaiter().GetResult()) {
+        using(HttpClient client=CreateClient()) using(HttpResponseMessage response=client.GetAsync(spec.url,HttpCompletionOption.ResponseHeadersRead,control.Token).GetAwaiter().GetResult()) {
             if(!response.IsSuccessStatusCode)throw new HttpRequestException("服务器返回 HTTP "+(int)response.StatusCode+"。");
-            using(Stream input=response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()) using(FileStream output=new FileStream(temp,FileMode.CreateNew,FileAccess.Write,FileShare.None)) Copy(input,output,spec.jobId);
+            if(expected<0) control.SetTotal(response.Content.Headers.ContentLength ?? -1);
+            using(Stream input=response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()) using(FileStream output=new FileStream(temp,FileMode.CreateNew,FileAccess.Write,FileShare.None)) Copy(input,output,control,true);
         }
         if(expected>=0 && new FileInfo(temp).Length!=expected)throw new IOException("下载文件大小与服务器声明不一致。");
-        File.Move(temp,spec.outputPath);
+        control.Gate(); File.Move(temp,spec.outputPath);
     }
-    static void DownloadPart(JobSpec spec,int index,long start,long end) {
+    static void DownloadPart(JobSpec spec,int index,long start,long end,long total,WorkerControl control) {
         string path=Path.Combine(PartsDir(spec.jobId),"part-"+index); Exception last=null;
         for(int attempt=0;attempt<3;attempt++) {
-            ThrowIfCanceled(spec.jobId); TryDelete(path);
+            control.Gate(); TryDelete(path); long copied=0;
             try {
                 using(HttpClient client=CreateClient()) using(HttpRequestMessage request=new HttpRequestMessage(HttpMethod.Get,spec.url)) {
                     request.Headers.Range=new RangeHeaderValue(start,end);
-                    using(HttpResponseMessage response=client.SendAsync(request,HttpCompletionOption.ResponseHeadersRead).GetAwaiter().GetResult()) {
-                        if(response.StatusCode!=HttpStatusCode.PartialContent)throw new IOException("服务器未接受分段请求。");
-                        using(Stream input=response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()) using(FileStream output=new FileStream(path,FileMode.CreateNew,FileAccess.Write,FileShare.None)) Copy(input,output,spec.jobId);
+                    using(HttpResponseMessage response=client.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,control.Token).GetAwaiter().GetResult()) {
+                        ContentRangeHeaderValue range=response.Content.Headers.ContentRange;
+                        if(response.StatusCode!=HttpStatusCode.PartialContent || range==null || range.From!=start || range.To!=end || range.Length!=total)throw new IOException("服务器未接受正确的分段请求。");
+                        using(Stream input=response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()) using(FileStream output=new FileStream(path,FileMode.CreateNew,FileAccess.Write,FileShare.Read)) Copy(input,output,control,true);
                     }
                 }
                 if(new FileInfo(path).Length!=end-start+1)throw new IOException("下载分段大小不一致。"); return;
-            } catch(Exception e) { last=e; TryDelete(path); if(attempt<2)Thread.Sleep(500*(attempt+1)); }
+            } catch(Exception e) {
+                last=e; if(File.Exists(path)) copied=new FileInfo(path).Length;
+                control.Add(-copied); TryDelete(path); control.Gate();
+                if(attempt<2 && control.Token.WaitHandle.WaitOne(500*(attempt+1))) control.Token.ThrowIfCancellationRequested();
+            }
         }
         throw last;
     }
-    static void Copy(Stream input,Stream output,string jobId) {
-        byte[] buffer=new byte[128*1024]; int count;
-        while((count=input.Read(buffer,0,buffer.Length))>0) { ThrowIfCanceled(jobId); output.Write(buffer,0,count); }
+    static void Copy(Stream input,Stream output,WorkerControl control,bool countProgress) {
+        using(control.Token.Register(() => { try { input.Dispose(); } catch {} })) {
+            byte[] buffer=new byte[128*1024]; int count;
+            while(true) {
+                control.Gate(); count=input.ReadAsync(buffer,0,buffer.Length,control.Token).GetAwaiter().GetResult();
+                if(count==0) break;
+                control.WriteChunk(output,buffer,count,countProgress);
+            }
+        }
     }
-    static void ThrowIfCanceled(string jobId) { if(File.Exists(CancelPath(jobId)))throw new OperationCanceledException(); }
 
     public static string SafeName(string input) {
         string s=Regex.Replace(input ?? "download","[<>:\"/\\\\|?*\\x00-\\x1f\\x7f]","_").TrimEnd('.',' ');
@@ -257,7 +332,7 @@ public static class DownloaderHost {
         if(String.IsNullOrEmpty(value)||value.Length>32768||value.Any(Char.IsControl)||!Uri.TryCreate(value,UriKind.Absolute,out uri)||
            (uri.Scheme!=Uri.UriSchemeHttp&&uri.Scheme!=Uri.UriSchemeHttps)||!String.IsNullOrEmpty(uri.UserInfo)) throw new Exception("只接受不含账号密码的 HTTP/HTTPS 直链。");
     }
-    static void ValidateJobId(string value) { Guid parsed; if(!Guid.TryParse(value,out parsed))throw new Exception("无效任务标识。"); }
+    static void ValidateJobId(string value) { Guid parsed; if(!Guid.TryParseExact(value,"D",out parsed))throw new Exception("无效任务标识。"); }
     static string NormalizeFolder(string folder) {
         if(String.IsNullOrWhiteSpace(folder))throw new Exception("未配置下载目录，请重新安装。");
         string full=Path.GetFullPath(folder.Trim()); if(!Path.IsPathRooted(full))throw new Exception("下载目录必须是完整路径。"); return full;
@@ -276,11 +351,20 @@ public static class DownloaderHost {
     }
     static void CheckWritable(string folder) { string p=Path.Combine(folder,".edge-download-"+Guid.NewGuid().ToString("N")+".tmp"); using(new FileStream(p,FileMode.CreateNew,FileAccess.Write,FileShare.None)){} File.Delete(p); }
     static JobStatus NewStatus(JobSpec spec,string state,string message,long downloaded,long total) { return new JobStatus {jobId=spec.jobId,state=state,message=message,outputPath=spec.outputPath,downloadedBytes=downloaded,totalBytes=total,updatedUtcMs=Now()}; }
-    static JobStatus ReadStatus(string id) { string p=StatusPath(id); if(!File.Exists(p))return null; try{return Json.Deserialize<JobStatus>(File.ReadAllText(p,Encoding.UTF8));}catch{return null;} }
+    static JobStatus ReadStatus(string id) {
+        string path=StatusPath(id);
+        try { using(FileStream input=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete)) using(StreamReader reader=new StreamReader(input,Encoding.UTF8)) return Json.Deserialize<JobStatus>(reader.ReadToEnd()); }
+        catch { return null; }
+    }
     static void WriteStatus(JobStatus status) { WriteJsonAtomic(StatusPath(status.jobId),status); }
-    static void WriteJsonAtomic(string path,object value) { string temp=path+"."+Guid.NewGuid().ToString("N")+".tmp"; File.WriteAllText(temp,Json.Serialize(value),new UTF8Encoding(false)); if(File.Exists(path))File.Replace(temp,path,null);else File.Move(temp,path); }
+    static void WriteJsonAtomic(string path,object value) {
+        string temp=path+"."+Guid.NewGuid().ToString("N")+".tmp";
+        try { File.WriteAllText(temp,new JavaScriptSerializer { MaxJsonLength=MaxFrame }.Serialize(value),new UTF8Encoding(false)); if(File.Exists(path))File.Replace(temp,path,null);else File.Move(temp,path); }
+        finally { TryDelete(temp); }
+    }
     static string JobPath(string id){return Path.Combine(JobsDir,id+".job.json");} static string StatusPath(string id){return Path.Combine(JobsDir,id+".status.json");}
     static string CancelPath(string id){return Path.Combine(JobsDir,id+".cancel");} static string PartsDir(string id){return Path.Combine(JobsDir,id+".parts");}
+    static string PausePath(string id){return Path.Combine(JobsDir,id+".pause");}
     static string TempOutput(JobSpec spec){return Path.Combine(Path.GetDirectoryName(spec.outputPath),"."+Path.GetFileName(spec.outputPath)+"."+spec.jobId+".edgepart");}
     static long Now(){return (long)(DateTime.UtcNow-Epoch).TotalMilliseconds;} static void TryDelete(string p){try{if(!String.IsNullOrEmpty(p)&&File.Exists(p))File.Delete(p);}catch{}}
     static void TryDeleteDirectory(string p){try{if(Directory.Exists(p))Directory.Delete(p,true);}catch{}}
