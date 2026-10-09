@@ -2,7 +2,7 @@
 
 将 Microsoft Edge 中符合条件的公开直链交给本机下载器，通过 HTTP Range 分段下载并自动合并文件。项目完全独立运行。
 
-[下载 v0.3.0](https://github.com/huoxushixiaoji-svg/-pcl-edge-/archive/refs/tags/v0.3.0.zip) · [完整中文说明](README-zh-CN.md) · [验证记录](VALIDATION.md)
+[下载 v0.3.0](https://github.com/huoxushixiaoji-svg/edge-downloder-/archive/refs/tags/v0.3.0.zip) · [完整中文说明](README-zh-CN.md) · [验证记录](VALIDATION.md)
 
 ## 主要特点
 
